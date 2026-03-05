@@ -11,6 +11,7 @@
         $pwd = $_POST["pwd"];
         $username = $_POST["username"];
         $blood = $_POST["blood"];
+        $isAjax = isset($_POST['ajax']) && $_POST['ajax'] == '1';
 
         try 
         {
@@ -39,9 +40,14 @@
                 $errors["email_exists"] = "Email already exists!";
             }
 
+
             // If there are errors, redirect back to the register page
             if($errors)
             {
+                if($isAjax) {
+                    echo json_encode(['status' => 'error', 'message' => implode(' | ', $errors)]);
+                    exit;
+                }
                 $_SESSION["donor_error_register"] = $errors;
                 header("Location: register.php");
                 die();
@@ -53,7 +59,12 @@
             // Store session for the donor
             $_SESSION["donor"] = $username;
 
-            // Redirect after successful registration
+            if($isAjax) {
+                echo json_encode(['status' => 'success', 'message' => 'Registration successful']);
+                exit;
+            }
+
+            // Redirect after successful registration (non-AJAX)
             header("Location: register.php?register=success");
 
             $pdo = null;

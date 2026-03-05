@@ -63,9 +63,8 @@
                                 <input type="password" class="form-control" name="pwd" required>
                                 <label>Password</label>
                             </div>
-                        </div>';
-                        echo
-                        '<button class="btn" type="submit" style="color:#fff;background-color:#0047ab;border:none;">Login</button>
+                        </div>
+                        <button class="btn" type="submit" style="color:#fff;background-color:#0047ab;border:none;">Login</button>
                     </form>';
                     if($name !== 'Admin Login' ) echo '<p class="mt-3">Dont have an account? <a href="register.php">Register here</a></p>';
                 echo '</div>
@@ -261,12 +260,26 @@
                     <h2 class="text-center">'.$name.'</h2>
                     <form action='.$path.' method="post">
                         <div class="form-group">
+                            <label for="blood_type">Blood Type</label>
+                            <select id="blood_type" name="blood_type" class="form-control" required>
+                                <option value="">-- select --</option>
+                                <option value="A+">A+</option>
+                                <option value="A-">A-</option>
+                                <option value="B+">B+</option>
+                                <option value="B-">B-</option>
+                                <option value="AB+">AB+</option>
+                                <option value="AB-">AB-</option>
+                                <option value="O+">O+</option>
+                                <option value="O-">O-</option>
+                            </select>
+                        </div>
+                        <div class="form-group">
                             <label for='.$name2.'>'.$name1.'</label>
                             <input type="text" id='.$name2.' name='.$name2.' class="form-control">
                         </div>
                         <div class="form-group">
                             <label for="units">Units</label>
-                            <input type="number" id="units" name="unit" class="form-control">
+                            <input type="number" id="units" name="unit" class="form-control" min="1" value="1">
                         </div>
                         <div class="text-center">
                             <button type="submit" class="btn" style="color:#fff;background-color:#0047ab;">'.$name3.'</button>
@@ -299,6 +312,7 @@
                 <div class="card-body transparent-bg">
                     <p class="card-text">'.$name1.' : ' . $row[$name2] . '</p>
                     <p class="card-text">Units : ' . $row['unit'] . '</p>
+                    <p class="card-text">Blood type : ' . $row['blood'] . '</p>
                     <b><p class="card-text">' . $row['status'] . '</p></b>
                 </div>
             </div>

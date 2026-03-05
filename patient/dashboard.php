@@ -56,6 +56,24 @@
             unset($_SESSION["patient_error_profile"]);
         }
     }
+
+    function print_success(string $message)
+    {
+        echo '<div class="alert alert-success alert-dismissible fade show text-center mx-auto" role="alert" style="width: fit-content;">';
+        echo $message;
+        echo '<button type="button" class="close" data-dismiss="alert" aria-label="Close">
+        <span aria-hidden="true">&times;</span>
+        </button>
+        </div>';
+    }
+
+    function check_mail_notice()
+    {
+        if (isset($_SESSION['patient_mail_sent'])) {
+            print_success($_SESSION['patient_mail_sent']);
+            unset($_SESSION['patient_mail_sent']);
+        }
+    }
 ?>
 
 <!DOCTYPE html>
@@ -134,6 +152,8 @@
     </div>
 
     <?php
+        // show success notice if an email was sent
+        check_mail_notice();
 
         if(isset($_GET))
         {

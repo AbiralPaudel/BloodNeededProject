@@ -64,9 +64,30 @@
         $stmt->bindParam(":username", $username);
         $stmt->execute();
         $result = $stmt->fetch(PDO::FETCH_ASSOC);
-        
+
         if(!$result) return false;
-        return password_verify($pwd, $result["pwd"]);
+
+        $stored = $result["pwd"];
+
+        // First try verifying assuming stored password is a hash
+        if (password_verify($pwd, $stored)) {
+            return true;
+        }
+
+        // Fallback: if stored password is plaintext (legacy), compare directly
+        // If it matches, upgrade to a bcrypt hash for security
+        if (hash_equals($stored, $pwd)) {
+            try {
+                $newHash = password_hash($pwd, PASSWORD_BCRYPT, ["cost" => 10]);
+                $up = $pdo->prepare("UPDATE admin SET pwd = :pwd WHERE username = :username");
+                $up->execute([':pwd' => $newHash, ':username' => $username]);
+            } catch (Exception $e) {
+                // ignore upgrade failure, but still allow login
+            }
+            return true;
+        }
+
+        return false;
     }
     
 ?>

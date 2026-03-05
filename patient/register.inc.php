@@ -10,6 +10,7 @@ if ($_SERVER["REQUEST_METHOD"] === "POST") {
     $pwd = $_POST["pwd"];
     $username = trim($_POST["username"]);
     $blood = trim($_POST["blood"]);
+    $isAjax = isset($_POST['ajax']) && $_POST['ajax'] == '1';
 
     try {
         // Error tracking
@@ -40,7 +41,12 @@ if ($_SERVER["REQUEST_METHOD"] === "POST") {
             $errors["email_exists"] = "Email already exists!";
         }
 
+
         if ($errors) {
+            if ($isAjax) {
+                echo json_encode(['status' => 'error', 'message' => implode(' | ', $errors)]);
+                exit();
+            }
             $_SESSION["patient_error_register"] = $errors;
             header("Location: register.php");
             exit();
@@ -51,6 +57,11 @@ if ($_SERVER["REQUEST_METHOD"] === "POST") {
 
         // Store session
         $_SESSION["patient"] = $username;
+
+        if ($isAjax) {
+            echo json_encode(['status' => 'success', 'message' => 'Registration successful']);
+            exit();
+        }
 
         header("Location: register.php?register=success");
         exit();

@@ -62,7 +62,38 @@
             $stmt->bindParam(":id", $id);
             $stmt->bindParam(":status", $input_status);
             $stmt->execute();
-    
+
+            // send notification to patient about status change
+            if (isset($result['patient_id'])) {
+                $patientId = $result['patient_id'];
+                $query = "SELECT email FROM patient WHERE id=:id";
+                $stmt = $pdo->prepare($query);
+                $stmt->bindParam(":id", $patientId);
+                $stmt->execute();
+                $emailRes = $stmt->fetch(PDO::FETCH_ASSOC);
+                if ($emailRes && !empty($emailRes['email'])) {
+                    require_once __DIR__ . "/../includes/mail.inc.php";
+                    $to = $emailRes['email'];
+                    $subject = 'Update on your blood request';
+                    if ($input_status === 'approved') {
+                        $body = "<p>Your request for <strong>{$request_unit}</strong> unit(s) of <strong>{$blood}</strong> blood has been <strong>approved</strong>.</p>";
+                    } else {
+                        $body = "<p>Your request for <strong>{$request_unit}</strong> unit(s) of <strong>{$blood}</strong> blood has been <strong>rejected</strong>";
+                        if (strpos($input_status, 'insufficient') !== false) {
+                            $body .= " because there is not enough stock available.";
+                        }
+                        $body .= ".</p>";
+                    }
+                    $sent = sendMail($to, $subject, $body);
+                    if ($sent) {
+                        $_SESSION['admin_mail_sent'] = "An email has been sent to: {$to}";
+                    } else {
+                        $msg = $_SESSION['mail_error'] ?? 'unknown error';
+                        $_SESSION['admin_mail_sent'] = "Failed to send email to {$to}: {$msg}";
+                    }
+                }
+            }
+
             header("Location:dashboard.php?requests_history=1");
     
             $pdo = null;
