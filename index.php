@@ -814,7 +814,8 @@
                 return;
             }
 
-            if(/\b(donate|donation|donate blood|want to donate|i want to donate)\b/.test(lower)){
+            // donation intent should be explicit (not eligibility questions like "can I donate")
+            if(/\b(donate blood|want to donate|i want to donate|how to donate|where to donate)\b/.test(lower)){
                 addMessage("If you'd like to donate blood, please register as a donor. Opening the registration form now.","bot-msg");
                 showRegisterModal();
                 return;
@@ -834,6 +835,13 @@
                 return;
             }
 
+            // don't answer for very short/single-word queries
+            const preTokens = preprocess(text);
+            if(preTokens.length <= 1){
+                addMessage("I'm sorry, I didn't quite understand that. Could you give me a bit more detail?","bot-msg");
+                return;
+            }
+
             let match = matchQuery(text);
 
             if(match.similarity > REGISTER_THRESHOLD && lower.includes("register")){
@@ -844,7 +852,7 @@
             if(match.similarity > SIMILARITY_THRESHOLD){
                 addMessage(faqs[match.index].answer,"bot-msg");
             }else{
-                addMessage("I can help with blood donation queries. Ask about eligibility, registration, blood groups, or say 'register'.","bot-msg");
+                addMessage("I'm sorry, I didn't quite understand that. You can ask about eligibility, registration, blood groups or similar topics.","bot-msg");
             }
             }
 
