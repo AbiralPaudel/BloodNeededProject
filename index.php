@@ -204,17 +204,20 @@
 
             /* ==========================================
                 BLOOD DONATION NLP CHATBOT
-                TF-IDF + COSINE SIMILARITY ENGINE
+                HYBRID MATCHING + MEDICAL ELIGIBILITY RULES
                 ========================================== 
             */
 
-            const SIMILARITY_THRESHOLD = 0.30;
+            const SIMILARITY_THRESHOLD = 0.34;
+            const HYBRID_THRESHOLD = 0.38;
+            const AMBIGUOUS_MARGIN = 0.05;
             const REGISTER_THRESHOLD = 0.40;
 
             let conversationContext = {};
             let idfCache = {};
             let vocabulary = [];
             let tfidfMatrix = [];
+            let faqTokenCache = [];
 
             /* ================================
             STOPWORDS
@@ -223,6 +226,43 @@
             "is","am","are","the","a","an","and","or","of","to","in","on",
             "for","with","what","how","can","i","you","me","my","about",
             "please","tell","do","does","did","be","been","this","that","have"
+            ]);
+
+            const MEDICAL_FINAL_REMINDER = "Final eligibility is determined by medical screening at the donation center.";
+
+            const PERMANENT_DISQUALIFY = new Set([
+                'hiv', 'hepatitis b', 'hepatitis c', 'untreated syphilis'
+            ]);
+
+            const CONDITIONAL_DONATION = new Set([
+                'diabetes', 'high blood pressure', 'asthma'
+            ]);
+
+            const TEMPORARY_DEFERRAL = new Set([
+                'fever', 'flu', 'infection', 'recent surgery'
+            ]);
+
+            const MEDICAL_ALIASES = new Map([
+                ['hiv positive', 'hiv'],
+                ['hiv', 'hiv'],
+                ['hepatitis b', 'hepatitis b'],
+                ['hep b', 'hepatitis b'],
+                ['hepatitis c', 'hepatitis c'],
+                ['hep c', 'hepatitis c'],
+                ['untreated syphilis', 'untreated syphilis'],
+                ['syphilis untreated', 'untreated syphilis'],
+                ['syphilis', 'untreated syphilis'],
+                ['diabetes', 'diabetes'],
+                ['diabetic', 'diabetes'],
+                ['high blood pressure', 'high blood pressure'],
+                ['hypertension', 'high blood pressure'],
+                ['high bp', 'high blood pressure'],
+                ['asthma', 'asthma'],
+                ['fever', 'fever'],
+                ['flu', 'flu'],
+                ['infection', 'infection'],
+                ['recent surgery', 'recent surgery'],
+                ['surgery', 'recent surgery']
             ]);
 
             // quick commands
@@ -480,6 +520,34 @@
                 return out.filter(w => w && !stopWords.has(w));
             }
 
+            function tokenCoverage(queryTokens, faqTokens){
+                if(!queryTokens.length) return 0;
+                const uniq = [...new Set(queryTokens)];
+                let matched = 0;
+                for(const t of uniq){
+                    if(faqTokens.has(t)) matched += 1;
+                }
+                return matched / uniq.length;
+            }
+
+            function toBigrams(tokens){
+                if(tokens.length < 2) return [];
+                const out = [];
+                for(let i = 0; i < tokens.length - 1; i++) out.push(tokens[i] + ' ' + tokens[i + 1]);
+                return out;
+            }
+
+            function phraseOverlapScore(queryTokens, faqTokens){
+                const qBigrams = toBigrams(queryTokens);
+                if(!qBigrams.length) return 0;
+                const fBigrams = new Set(toBigrams([...faqTokens]));
+                let matched = 0;
+                for(const bg of qBigrams){
+                    if(fBigrams.has(bg)) matched += 1;
+                }
+                return matched / qBigrams.length;
+            }
+
             // Build sparse TF-IDF: for each document, store {term:weight} and norm
             function buildTFIDF(){
                 vocabulary = [];
@@ -506,7 +574,6 @@
 
                 // build sparse tf-idf for each doc
                 tfidfMatrix = [];
-                const docNorms = [];
                 documents.forEach(doc=>{
                     const freqs = {};
                     doc.forEach(t=> freqs[t] = (freqs[t]||0) + 1);
@@ -519,8 +586,10 @@
                     }
                     const norm = Math.sqrt(sumSq) || 1;
                     tfidfMatrix.push({vec, norm});
-                    docNorms.push(norm);
                 });
+
+                // cache FAQ tokens for overlap/phrase scoring.
+                faqTokenCache = faqs.map(f => new Set(preprocess(`${f.question} ${f.answer}`)));
 
                 // cache idf
                 localStorage.setItem('idfCache', JSON.stringify(idfCache));
@@ -549,11 +618,14 @@
                 const queryNorm = Math.sqrt(sumSq) || 1;
 
                 let best = {similarity:0, index:-1};
+                const ranked = [];
                 for(let i=0;i<tfidfMatrix.length;i++){
                     const sim = sparseCosine(queryVec, queryNorm, tfidfMatrix[i]);
+                    ranked.push({index:i, similarity:sim});
                     if(sim > best.similarity){ best.similarity = sim; best.index = i; }
                 }
-                return {similarity: best.similarity, index: best.index};
+                ranked.sort((a,b)=> b.similarity - a.similarity);
+                return {similarity: best.similarity, index: best.index, ranked};
             }
 
             /* ================================
@@ -629,14 +701,166 @@
             score = alpha * intentScore + beta * tfidfScore
             Where alpha=0.6, beta=0.4 by default. Intent high-priority intents can override.
             ================================= */
-            const ALPHA = 0.6, BETA = 0.4;
+            const ALPHA = 0.10, BETA = 0.55, GAMMA = 0.35;
 
             function combinedMatch(text){
                 const intent = intentClassifier(text);
                 const tf = matchQuery(text);
-                const tfidfScore = tf.similarity || 0;
-                const combined = ALPHA * intent.score + BETA * tfidfScore;
-                return {intent, tfidf: tf, score: combined};
+                const qTokens = preprocess(text);
+
+                const rankedHybrid = tf.ranked.slice(0, 8).map(r => {
+                    const overlap = tokenCoverage(qTokens, faqTokenCache[r.index] || new Set());
+                    const phrase = phraseOverlapScore(qTokens, faqTokenCache[r.index] || new Set());
+                    const semantic = (0.75 * r.similarity) + (0.25 * phrase);
+                    const score = (ALPHA * intent.score) + (BETA * semantic) + (GAMMA * overlap);
+                    return {
+                        index: r.index,
+                        tfidf: r.similarity,
+                        overlap,
+                        phrase,
+                        score
+                    };
+                }).sort((a,b)=> b.score - a.score);
+
+                const best = rankedHybrid[0] || {index:-1, score:0, tfidf:0};
+                const second = rankedHybrid[1] || {index:-1, score:0, tfidf:0};
+                return {intent, tfidf: tf, rankedHybrid, best, second};
+            }
+
+            function buildSuggestionText(matches){
+                const suggestions = matches
+                    .slice(0, 3)
+                    .map(m => `- ${faqs[m.index].question}`)
+                    .join('\n');
+                return `I want to give a precise answer, but your question is still a bit unclear. You can try one of these:\n${suggestions}`;
+            }
+
+            function titleCaseWords(text){
+                return text.split(/\s+/).filter(Boolean).map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' ');
+            }
+
+            function escapeRegex(text){
+                return text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+            }
+
+            function extractMedicalCondition(text){
+                const low = text.toLowerCase();
+                const aliasKeys = Array.from(MEDICAL_ALIASES.keys()).sort((a,b)=> b.length - a.length);
+
+                for(const key of aliasKeys){
+                    const rx = new RegExp(`\\b${escapeRegex(key)}\\b`, 'i');
+                    if(rx.test(low)){
+                        const normalized = MEDICAL_ALIASES.get(key);
+                        return {normalized, display: titleCaseWords(normalized)};
+                    }
+                }
+
+                const fallbackPattern = /(?:i have|with|has|had|suffering from|condition is)\s+([a-z\-]+(?:\s+[a-z\-]+){0,4})/i;
+                const m = low.match(fallbackPattern);
+                if(m && m[1]){
+                    const raw = m[1]
+                        .replace(/\b(donate|donation|blood|allowed|eligibility|person|someone)\b.*$/i, '')
+                        .trim()
+                        .replace(/\s+/g, ' ');
+                    if(raw){
+                        return {normalized: null, display: titleCaseWords(raw)};
+                    }
+                }
+
+                return null;
+            }
+
+            function isMedicalEligibilityQuestion(text){
+                const low = text.toLowerCase();
+                const patterns = [
+                    /can\s+(i|a\s+person|someone)\s+donate/i,
+                    /is\s+blood\s+donation\s+allowed/i,
+                    /donate\s+blood/i,
+                    /eligible\s+to\s+donate/i
+                ];
+                return patterns.some(p => p.test(low));
+            }
+
+            function getMedicalEligibilityResponse(conditionInfo){
+                const normalized = conditionInfo?.normalized;
+                const diseaseName = conditionInfo?.display || 'this condition';
+
+                if(normalized && PERMANENT_DISQUALIFY.has(normalized)){
+                    return `People with ${diseaseName} are generally not allowed to donate blood because it can be transmitted through blood. Please consult a healthcare professional for confirmation.\n\n${MEDICAL_FINAL_REMINDER}`;
+                }
+
+                if(normalized && CONDITIONAL_DONATION.has(normalized)){
+                    return `People with ${diseaseName} may be able to donate blood if the condition is well controlled and they are feeling healthy. It is recommended to consult a doctor or blood donation center before donating.\n\n${MEDICAL_FINAL_REMINDER}`;
+                }
+
+                if(normalized && TEMPORARY_DEFERRAL.has(normalized)){
+                    return `If you currently have or recently had ${diseaseName}, you should wait until you fully recover before donating blood.\n\n${MEDICAL_FINAL_REMINDER}`;
+                }
+
+                return `I'm not sure about blood donation eligibility for ${diseaseName}. Please consult a healthcare professional or your local blood donation center.\n\n${MEDICAL_FINAL_REMINDER}`;
+            }
+
+            function isGeneralEligibilityQuestion(text){
+                const low = text.toLowerCase();
+                const patterns = [
+                    /eligib|eligible/i,
+                    /age/i,
+                    /weight|kg|kilo/i,
+                    /good health|healthy|health condition/i,
+                    /active infection|infection/i,
+                    /requirement|criteria|minimum requirements/i,
+                    /can i donate blood/i,
+                    /who can donate blood/i
+                ];
+                return patterns.some(p => p.test(low));
+            }
+
+            function getGeneralEligibilityResponse(){
+                return `Typical blood donation eligibility guidelines are:\n- Age: Usually 18-65 years old\n- Minimum weight: Around 50 kg\n- Must be in good health\n- No active infections\n\n${MEDICAL_FINAL_REMINDER}`;
+            }
+
+            function isPreparationQuestion(text){
+                const low = text.toLowerCase();
+                const patterns = [
+                    /before donating|before donation|prepare|preparation/i,
+                    /what to do before donation|how to prepare/i,
+                    /what to eat before donation|drink water before donation/i
+                ];
+                return patterns.some(p => p.test(low));
+            }
+
+            function getPreparationResponse(){
+                return `Before donating blood, you should:\n- Eat a healthy meal beforehand\n- Drink plenty of water\n- Avoid alcohol\n- Get good sleep\n- Bring identification\n\nThese steps help ensure a safe donation experience.`;
+            }
+
+            function isPostDonationQuestion(text){
+                const low = text.toLowerCase();
+                const patterns = [
+                    /after donating|after donation|post donation|post-donation/i,
+                    /what to do after donation|after giving blood/i,
+                    /care after blood donation/i
+                ];
+                return patterns.some(p => p.test(low));
+            }
+
+            function getPostDonationResponse(){
+                return `After donating blood, you should:\n- Rest for 10-15 minutes\n- Drink fluids\n- Avoid heavy exercise for 24 hours\n- Eat iron-rich foods`;
+            }
+
+            function isDonationFrequencyQuestion(text){
+                const low = text.toLowerCase();
+                const patterns = [
+                    /how often can i donate/i,
+                    /how frequently can i donate/i,
+                    /donation interval|interval between donations/i,
+                    /when can i donate again/i,
+                    /whole blood.*how often|platelets.*how often|plasma.*how often/i
+                ];
+                return patterns.some(p => p.test(low));
+            }
+
+            function getDonationFrequencyResponse(){
+                return `Typical blood donation frequency guidelines are:\n- Whole blood: every 3 months (men) or 4 months (women) depending on country\n- Platelets: more frequently\n- Plasma: may be donated more often\n\nGuidelines vary by country.`;
             }
 
             /* ================================
@@ -725,6 +949,7 @@
 
             function handleBloodTypeResponse(text){
                 const group = normalizeBloodInput(text);
+                let groupLabel = null;
 
                 // helper: levenshtein distance for fuzzy matching
                 function levenshtein(a, b){
@@ -808,6 +1033,32 @@
                 return;
             }
 
+            const extractedCondition = extractMedicalCondition(text);
+            if (isMedicalEligibilityQuestion(text) && extractedCondition) {
+                addMessage(getMedicalEligibilityResponse(extractedCondition), "bot-msg");
+                return;
+            }
+
+            if (isGeneralEligibilityQuestion(text)) {
+                addMessage(getGeneralEligibilityResponse(), "bot-msg");
+                return;
+            }
+
+            if (isPreparationQuestion(text)) {
+                addMessage(getPreparationResponse(), "bot-msg");
+                return;
+            }
+
+            if (isPostDonationQuestion(text)) {
+                addMessage(getPostDonationResponse(), "bot-msg");
+                return;
+            }
+
+            if (isDonationFrequencyQuestion(text)) {
+                addMessage(getDonationFrequencyResponse(), "bot-msg");
+                return;
+            }
+
             // Explicit intent rules (take precedence over TF-IDF matching)
             if(/\b(register|signup|sign up|sign\-up)\b/.test(lower) || lower.includes('i want to register')){
                 showRegisterModal();
@@ -842,18 +1093,26 @@
                 return;
             }
 
-            let match = matchQuery(text);
+            const hybrid = combinedMatch(text);
 
-            if(match.similarity > REGISTER_THRESHOLD && lower.includes("register")){
+            if(hybrid.best.tfidf > REGISTER_THRESHOLD && lower.includes("register")){
                 showRegisterModal();
                 return;
             }
 
-            if(match.similarity > SIMILARITY_THRESHOLD){
-                addMessage(faqs[match.index].answer,"bot-msg");
-            }else{
-                addMessage("I'm sorry, I didn't quite understand that. You can ask about eligibility, registration, blood groups or similar topics.","bot-msg");
+            const likelyAmbiguous = hybrid.best.score >= SIMILARITY_THRESHOLD && (hybrid.best.score - hybrid.second.score) < AMBIGUOUS_MARGIN;
+
+            if(hybrid.best.score >= HYBRID_THRESHOLD && !likelyAmbiguous && hybrid.best.index !== -1){
+                addMessage(faqs[hybrid.best.index].answer,"bot-msg");
+                return;
             }
+
+            if(likelyAmbiguous){
+                addMessage(buildSuggestionText(hybrid.rankedHybrid), "bot-msg");
+                return;
+            }
+
+            addMessage("I'm sorry, I didn't quite understand that. You can ask about eligibility, registration, blood groups, donation timing, or emergency blood requests.","bot-msg");
             }
 
             // Intercept next user message when expecting a blood type
